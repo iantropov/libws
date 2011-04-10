@@ -5,14 +5,16 @@
  *      Author: ant
  */
 
-#include "web_sockets_parse.h"
+#include "web_sockets_parser.h"
+
+#include <stdlib.h>
 
 struct ws_parser_info {
 	int top;
 
 	handshake_cb *h_cb;
-	message_cb *h_cb;
-	error_cb *h_cb;
+	message_cb *m_cb;
+	error_cb *e_cb;
 };
 
 //void (*handshake_cb)(struct list_head *h, u_char *challenge, void *arg);
@@ -21,7 +23,7 @@ struct ws_parser_info {
 
 struct ws_parser_info *ws_parser_init(handshake_cb *hcb, message_cb *mcb, error_cb *ecb)
 {
-	struct ws_parser_info *info = (struct ws_parser_info)calloc(1, sizeof(struct ws_parser_info));
+	struct ws_parser_info *info = (struct ws_parser_info *)calloc(1, sizeof(struct ws_parser_info));
 	if (info == NULL)
 		return NULL;
 

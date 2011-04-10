@@ -12,9 +12,10 @@
 
 struct ws_parser_info;
 
-void (*handshake_cb)(struct list_head *h, u_char *challenge, void *arg);
-void (*message_cb)(u_char *message, void *arg);
-void (*handshake_cb)(short what, void *arg);
+typedef unsigned char u_char;
+typedef void (*handshake_cb)(struct list_head *h, u_char *challenge, void *arg);
+typedef void (*message_cb)(u_char *message, void *arg);
+typedef void (*error_cb)(short what, void *arg);
 
 struct ws_parser_info *ws_parser_init(handshake_cb *hcb, message_cb *mcb, error_cb *ecb);
 
