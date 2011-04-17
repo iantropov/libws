@@ -39,14 +39,8 @@ static void save_header_value(struct ws_parser_info *wsp, u_char *value)
 
 static u_char *save_string(u_char *start, int off, u_char *cur)
 {
-	/*int len = (int)(cur - start - off) + 1;
-	u_char *str = (u_char *)calloc(len, sizeof(u_char));
-	if (str == NULL)
-		return NULL;
-		*/
 	*cur = '\0';
-	
-	return start + off;//memcpy(str, start + off, len);
+	return start + off;
 } 
 
 %%{
@@ -60,19 +54,11 @@ static u_char *save_string(u_char *start, int off, u_char *cur)
 	action A_save_uri
 	{
 		info->uri = save_string(start, info->start, p);
-		if (info->uri == NULL) {
-			handle_error(info, WS_PARSER_INTERNAL_ERROR);
-			fbreak;
-		}
 	}
 	
 	action A_save_key
 	{
 		key = save_string(start, info->start, p);
-		if (key == NULL) {
-			handle_error(info, WS_PARSER_INTERNAL_ERROR);
-			fbreak;
-		}
 		
 		if (save_header_key(info, key) == -1)
 			fbreak;
@@ -81,10 +67,6 @@ static u_char *save_string(u_char *start, int off, u_char *cur)
 	action A_save_value
 	{
 		value = save_string(start, info->start, p);
-		if (value == NULL) {
-			handle_error(info, WS_PARSER_INTERNAL_ERROR);
-			fbreak;
-		}
 		
 		save_header_value(info, value);
 	}
@@ -92,10 +74,6 @@ static u_char *save_string(u_char *start, int off, u_char *cur)
 	action A_handle_handshake
 	{
 		challenge = save_string(start, info->start, p);
-		if (challenge == NULL) {
-			handle_error(info, WS_PARSER_INTERNAL_ERROR);
-			fbreak;
-		}
 		
 		info->h_cb(&info->headers, info->uri, challenge, info->cb_arg);
 		
@@ -105,10 +83,6 @@ static u_char *save_string(u_char *start, int off, u_char *cur)
 	action A_handle_message
 	{
 		message = save_string(start, info->start + 1, p);
-		if (message == NULL) {
-			handle_error(info, WS_PARSER_INTERNAL_ERROR);
-			fbreak;
-		}
 
 		info->m_cb(message, info->cb_arg);
 		
@@ -121,13 +95,13 @@ static u_char *save_string(u_char *start, int off, u_char *cur)
 		
 		info->ready_for_drain += 2;
 		
-		return;
+		fbreak;
 	}
 	 
 	action A_handle_error
 	{
 		handle_error(info, WS_PARSER_PARSE_ERROR);
-		return;
+		fbreak;
 	}
 
 #--------------------------------------------------------#

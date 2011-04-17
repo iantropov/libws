@@ -12,7 +12,6 @@
 
 struct ws_parser_info {
 	int cs;
-	u_char *p;
 	int start;
 	int off;
 

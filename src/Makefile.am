@@ -1,11 +1,17 @@
 ## Process this file with automake to produce Makefile.in
 
-bin_PROGRAMS = ws_demo
-
-ws_demo_SOURCES = main.c
-
 lib_LTLIBRARIES = libws.la
 
-libws_la_SOURCES = web_sockets.c web_sockets.h web_sockets_parse.h web_sockets_parse.c
+web_sockets_parser_parse.c : web_sockets_parser_parse.rl
+				ragel -o $@ $<
 
-ws_demo_LDADD = libws.la
+libws_la_SOURCES = 	web_sockets.c web_sockets.h\
+			web_sockets_parser.h web_sockets_parser.c\
+			web_sockets_parser_parse.c\
+			web_sockets_parser_internal.h
+
+bin_PROGRAMS = demo
+
+demo_SOURCES = main.c
+
+demo_LDADD = libws.la

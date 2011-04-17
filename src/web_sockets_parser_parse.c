@@ -41,22 +41,16 @@ static void save_header_value(struct ws_parser_info *wsp, u_char *value)
 
 static u_char *save_string(u_char *start, int off, u_char *cur)
 {
-	/*int len = (int)(cur - start - off) + 1;
-	u_char *str = (u_char *)calloc(len, sizeof(u_char));
-	if (str == NULL)
-		return NULL;
-		*/
 	*cur = '\0';
-	
-	return start + off;//memcpy(str, start + off, len);
+	return start + off;
 } 
 
 
-#line 137 "web_sockets_parser_parse.rl"
+#line 111 "web_sockets_parser_parse.rl"
 
 
 
-#line 60 "web_sockets_parser_parse.c"
+#line 54 "web_sockets_parser_parse.c"
 static const char _web_sockets_parser_actions[] = {
 	0, 1, 0, 1, 1, 1, 2, 1, 
 	3, 1, 4, 1, 5, 1, 6, 1, 
@@ -188,7 +182,7 @@ static const int web_sockets_parser_error = 0;
 static const int web_sockets_parser_en_main = 1;
 
 
-#line 140 "web_sockets_parser_parse.rl"
+#line 114 "web_sockets_parser_parse.rl"
 
 void ws_parser_parse(struct ws_parser_info *info, u_char *start, u_char *end)
 {
@@ -202,7 +196,7 @@ void ws_parser_parse(struct ws_parser_info *info, u_char *start, u_char *end)
 			*challenge;
 
 	
-#line 206 "web_sockets_parser_parse.c"
+#line 200 "web_sockets_parser_parse.c"
 	{
 	int _klen;
 	unsigned int _trans;
@@ -277,54 +271,38 @@ _match:
 		switch ( *_acts++ )
 		{
 	case 0:
-#line 56 "web_sockets_parser_parse.rl"
+#line 50 "web_sockets_parser_parse.rl"
 	{
 		info->start = (int)(p - start);
 	}
 	break;
 	case 1:
-#line 61 "web_sockets_parser_parse.rl"
+#line 55 "web_sockets_parser_parse.rl"
 	{
 		info->uri = save_string(start, info->start, p);
-		if (info->uri == NULL) {
-			handle_error(info, WS_PARSER_INTERNAL_ERROR);
-			{p++; goto _out; }
-		}
 	}
 	break;
 	case 2:
-#line 70 "web_sockets_parser_parse.rl"
+#line 60 "web_sockets_parser_parse.rl"
 	{
 		key = save_string(start, info->start, p);
-		if (key == NULL) {
-			handle_error(info, WS_PARSER_INTERNAL_ERROR);
-			{p++; goto _out; }
-		}
 		
 		if (save_header_key(info, key) == -1)
 			{p++; goto _out; }
 	}
 	break;
 	case 3:
-#line 82 "web_sockets_parser_parse.rl"
+#line 68 "web_sockets_parser_parse.rl"
 	{
 		value = save_string(start, info->start, p);
-		if (value == NULL) {
-			handle_error(info, WS_PARSER_INTERNAL_ERROR);
-			{p++; goto _out; }
-		}
 		
 		save_header_value(info, value);
 	}
 	break;
 	case 4:
-#line 93 "web_sockets_parser_parse.rl"
+#line 75 "web_sockets_parser_parse.rl"
 	{
 		challenge = save_string(start, info->start, p);
-		if (challenge == NULL) {
-			handle_error(info, WS_PARSER_INTERNAL_ERROR);
-			{p++; goto _out; }
-		}
 		
 		info->h_cb(&info->headers, info->uri, challenge, info->cb_arg);
 		
@@ -332,13 +310,13 @@ _match:
 	}
 	break;
 	case 7:
-#line 128 "web_sockets_parser_parse.rl"
+#line 102 "web_sockets_parser_parse.rl"
 	{
 		handle_error(info, WS_PARSER_PARSE_ERROR);
-		return;
+		{p++; goto _out; }
 	}
 	break;
-#line 342 "web_sockets_parser_parse.c"
+#line 320 "web_sockets_parser_parse.c"
 		}
 	}
 
@@ -348,13 +326,9 @@ _again:
 	while ( _nacts-- > 0 ) {
 		switch ( *_acts++ ) {
 	case 5:
-#line 106 "web_sockets_parser_parse.rl"
+#line 84 "web_sockets_parser_parse.rl"
 	{
 		message = save_string(start, info->start + 1, p);
-		if (message == NULL) {
-			handle_error(info, WS_PARSER_INTERNAL_ERROR);
-			{p++; goto _out; }
-		}
 
 		info->m_cb(message, info->cb_arg);
 		
@@ -362,16 +336,16 @@ _again:
 	}
 	break;
 	case 6:
-#line 119 "web_sockets_parser_parse.rl"
+#line 93 "web_sockets_parser_parse.rl"
 	{
 		handle_error(info, WS_PARSER_CLOSING_FRAME);
 		
 		info->ready_for_drain += 2;
 		
-		return;
+		{p++; goto _out; }
 	}
 	break;
-#line 375 "web_sockets_parser_parse.c"
+#line 349 "web_sockets_parser_parse.c"
 		}
 	}
 
@@ -387,13 +361,13 @@ _again:
 	while ( __nacts-- > 0 ) {
 		switch ( *__acts++ ) {
 	case 7:
-#line 128 "web_sockets_parser_parse.rl"
+#line 102 "web_sockets_parser_parse.rl"
 	{
 		handle_error(info, WS_PARSER_PARSE_ERROR);
-		return;
+		{p++; goto _out; }
 	}
 	break;
-#line 397 "web_sockets_parser_parse.c"
+#line 371 "web_sockets_parser_parse.c"
 		}
 	}
 	}
@@ -401,7 +375,7 @@ _again:
 	_out: {}
 	}
 
-#line 153 "web_sockets_parser_parse.rl"
+#line 127 "web_sockets_parser_parse.rl"
 
 	info->cs = cs;
 	info->off = p - start;
