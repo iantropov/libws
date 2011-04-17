@@ -8,10 +8,11 @@
 #ifndef WEB_SOCKETS_H_
 #define WEB_SOCKETS_H_
 
+#include </usr/include/sys/types.h>
+
 struct ws_server;
 struct ws_connection;
 
-typedef unsigned char u_char;
 typedef void (*ws_cb)(struct ws_connection, u_char *message);
 
 struct ws_server *ws_init(int port);
