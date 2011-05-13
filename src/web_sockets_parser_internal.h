@@ -9,6 +9,8 @@
 #define WEB_SOCKETS_PARSER_INTERNAL_H_
 
 #include "web_sockets_parser.h"
+#include "web_sockets.h"
+#include "event.h"
 
 struct ws_parser_info {
 	int cs;
@@ -17,14 +19,12 @@ struct ws_parser_info {
 
 	size_t ready_for_drain;
 
-	u_char *uri;
-	struct list_head headers;
-
-	handshake_cb h_cb;
 	message_cb m_cb;
 	error_cb e_cb;
 
 	void *cb_arg;
+
+	short error;
 };
 
 void clean_parser_info(struct ws_parser_info *wsp);

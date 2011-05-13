@@ -6,65 +6,279 @@
  */
 
 #include "web_sockets.h"
-#include "list.h"
+#include "web_sockets_parser.h"
+
+#include <event0/bufevent.h>
+#include <event0/evhttp.h>
 
 #include <stdio.h>
 #include <openssl/md5.h>
-#include "sys/socket.h"
-#include "sys/types.h"
 #include "netinet/in.h"
-#include "memory.h"
-#include <stdlib.h>
-#include <unistd.h>
-#include <errno.h>
 #include <event.h>
-#include <fcntl.h>
-#include <signal.h>
 
 #define MAX_CLIENTS 5
-
-struct cb_entry {
-	struct list_head list;
-
-	char *uri;
-	ws_cb *cb;
-};
-
-struct ws_server {
-	struct list_head callbacks;
-
-	struct event ev_accept;
-};
+#define CHALLENGE_REQUEST_SIZE 8
+#define CHALLENGE_RESPONSE_SIZE 16
 
 struct ws_connection {
-	char *uri;
-	struct bufferevent *bufev;
+	struct bufevent *bufev;
+	struct ws_parser_info *info;
 
-	ws_cb *cb;
+	ws_init_cb init_cb;
+	ws_message_cb mes_cb;
+	ws_error_cb err_cb;
+	void *cb_arg;
 };
 
+static int get_number_from_string(char *str);
+static u_char *md5_hash_challenge(int key_1, int key_2, u_char *value);
+static char *ws_get_location(char *location, char *uri);
 
-static char *string_copy(char *source);
-
-static int handshake_response(struct bufferevent *bufev, u_char *hash)
+static int ws_handshake_response(struct evhttp_request *req, char *origin, char *location, u_char *hash)
 {
+	evhttp_add_header(req->output_headers, "Upgrade", "WebSocket");
+	evhttp_add_header(req->output_headers, "Connection", "Upgrade");
+	evhttp_add_header(req->output_headers, "Sec-WebSocket-Origin", origin);
+
+	char *sec_location = ws_get_location(location, req->uri);
+	if (sec_location == NULL)
+		return -1;
+
+	evhttp_add_header(req->output_headers, "Sec-WebSocket-Location", sec_location);
+	free(sec_location);
+
 	struct evbuffer *buf = evbuffer_new();
 	if (buf == NULL)
 		return -1;
 
-	evbuffer_add_printf(buf, "HTTP/1.1 101 WebSocket Protocol Handshake\r\n");
-	evbuffer_add_printf(buf, "Upgrade: WebSocket\r\n");
-	evbuffer_add_printf(buf, "Connection: Upgrade\r\n");
-	evbuffer_add_printf(buf, "Sec-WebSocket-Origin: null\r\n");
-	evbuffer_add_printf(buf, "Sec-WebSocket-Location: ws://192.168.0.100:8082/\r\n");
-	evbuffer_add_printf(buf, "\r\n");
-	evbuffer_add(buf, hash, 16);
+	evbuffer_add(buf, hash, CHALLENGE_RESPONSE_SIZE);
 
-	int ret = bufferevent_write_buffer(bufev, buf);
+	evhttp_send_reply(req, 101, "WebSocket Protocol Handshake", buf);
 
 	evbuffer_free(buf);
 
-	return ret;
+	return 0;
+}
+
+static u_char *ws_prepare_handshake_response(char *s_key_1, char *s_key_2, u_char *hash)
+{
+	int key_1 = get_number_from_string(s_key_1);
+	int key_2 = get_number_from_string(s_key_2);
+
+	return md5_hash_challenge(key_1, key_2, hash);
+}
+
+void ws_free(struct ws_connection *conn)
+{
+	if (conn->bufev != NULL)
+		bufevent_free(conn->bufev);
+
+	ws_parser_destroy(conn->info);
+
+	free(conn);
+}
+
+static void ws_handle_message(u_char *message, void *arg)
+{
+	struct ws_connection *conn = (struct ws_connection *)arg;
+
+	if (conn->mes_cb != NULL)
+		conn->mes_cb(conn, message, conn->cb_arg);
+}
+
+static void ws_error(struct ws_connection *conn, short what)
+{
+	if (conn->err_cb != NULL)
+		conn->err_cb(conn, what, conn->cb_arg);
+}
+
+static void ws_handle_error(struct ws_parser_info *info, short what, void *arg)
+{
+	ws_error((struct ws_connection *)arg, what);
+}
+
+void ws_set_cbs(struct ws_connection *conn, ws_init_cb init_cb,
+		ws_message_cb mes_cb, ws_error_cb err_cb, void *arg)
+{
+	conn->init_cb = init_cb;
+	conn->mes_cb = mes_cb;
+	conn->err_cb = err_cb;
+
+	conn->cb_arg = arg;
+}
+
+struct ws_connection *ws_new(ws_init_cb init_cb, ws_message_cb mes_cb, ws_error_cb err_cb, void *arg)
+{
+	struct ws_parser_info *info = NULL;
+	struct ws_connection *conn = (struct ws_connection *)calloc(1, sizeof(struct ws_connection));
+	if (conn == NULL)
+		goto error;
+
+	info = ws_parser_init(ws_handle_message, ws_handle_error, conn);
+	if (info == NULL)
+		goto error;
+
+	conn->info = info;
+
+	ws_set_cbs(conn, init_cb, mes_cb, err_cb, arg);
+
+	return conn;
+error:
+	free(conn);
+	ws_parser_destroy(info);
+
+	return NULL;
+}
+
+static void ws_readcb(struct bufevent *bufev, void *arg)
+{
+	struct ws_connection *conn = (struct ws_connection *)arg;
+	struct evbuffer *buf = bufevent_get_input(bufev);
+
+	ws_parser_parse(conn->info, buf->buffer, buf->buffer + buf->off);
+
+	evbuffer_drain(buf, ws_parser_drain(conn->info));
+}
+
+static void ws_errorcb(struct bufevent *bufev, short what, void *arg)
+{
+	ws_error((struct ws_connection *)arg, what);
+}
+
+static void ws_after_handshake(struct bufevent *bufev, void *arg)
+{
+	struct ws_connection *ws_conn = arg;
+
+	bufevent_setcb(bufev, ws_readcb, NULL, ws_errorcb, ws_conn);
+
+	ws_conn->bufev = bufev;
+
+	if (ws_conn->init_cb != NULL)
+		ws_conn->init_cb(ws_conn, ws_conn->cb_arg);
+}
+
+static void ws_handshakecb(struct evhttp_request *req, void *arg)
+{
+	struct ws_connection *ws_conn = arg;
+
+	struct evkeyvalq *headers = req->input_headers;
+
+	char *sec_key_1 = (char *)evhttp_find_header(headers, "Sec-WebSocket-Key1");
+	if (sec_key_1 == NULL)
+		goto error;
+
+	char *sec_key_2 = (char *)evhttp_find_header(headers, "Sec-WebSocket-Key2");
+	if (sec_key_2 == NULL)
+		goto error;
+
+	char *origin = (char *)evhttp_find_header(headers, "Origin");
+	if (origin == NULL)
+		goto error;
+
+	char *location = (char *)evhttp_find_header(headers, "Host");
+	if (location == NULL)
+		goto error;
+
+	u_char *challenge = EVBUFFER_DATA(req->input_buffer);
+	if (challenge == NULL)
+		goto error;
+
+	u_char *hash = ws_prepare_handshake_response(sec_key_1, sec_key_2, challenge);
+
+	evhttp_connection_upgrade(req->evcon, ws_after_handshake, ws_conn);
+
+	if (ws_handshake_response(req, origin, location, hash) == -1)
+		goto error;
+
+	free(hash);
+
+	return;
+error:
+
+	ws_error(ws_conn, 1);
+
+	free(hash);
+
+	evhttp_send_error(req, 500, "Internal Error");
+}
+
+void evhttp_set_ws(struct evhttp *http, char *uri, struct ws_connection *conn)
+{
+	evhttp_set_cb(http, uri, ws_handshakecb, conn);
+}
+
+int ws_send_message(struct ws_connection *conn, u_char *message)
+{
+	if (conn->bufev == NULL)
+		return -1;
+
+	if (bufevent_write(conn->bufev, "\x00", 1) == -1)
+		return -1;
+
+	if (bufevent_write(conn->bufev, message, strlen((char *)message)) == -1)
+		return -1;
+
+	if (bufevent_write(conn->bufev, "\xff", 1) == -1)
+		return -1;
+
+	return 0;
+}
+
+struct bufevent *ws_get_bufevent(struct ws_connection *conn)
+{
+	return conn->bufev;
+}
+
+int ws_send_close(struct ws_connection *conn)
+{
+	if (conn->bufev == NULL)
+		return -1;
+
+	if (bufevent_write(conn->bufev, "\xff", 1) == -1)
+		return -1;
+
+	if (bufevent_write(conn->bufev, "\x00", 1) == -1)
+		return -1;
+
+	return 0;
+}
+
+/*-----------------HELPER FUNCTIONS------------------------*/
+
+static u_char *md5_hash_challenge(int key_1, int key_2, u_char *value)
+{
+	u_char *hashed_value = (u_char *)malloc(CHALLENGE_RESPONSE_SIZE);
+	if (hashed_value == NULL)
+		return NULL;
+
+	int key_1_big_endian = htonl(key_1);
+	int key_2_big_endian = htonl(key_2);
+	memcpy(hashed_value, (char *)&key_1_big_endian, sizeof(int));
+	memcpy(hashed_value + sizeof(int), (char *)&key_2_big_endian, sizeof(int));
+	memcpy(hashed_value + CHALLENGE_REQUEST_SIZE, value, CHALLENGE_REQUEST_SIZE);
+
+	u_char *hash = (u_char *)malloc(CHALLENGE_RESPONSE_SIZE);
+	if (hash == NULL)
+		goto exit;
+
+	MD5(hashed_value, CHALLENGE_RESPONSE_SIZE, hash);
+
+exit :
+	free(hashed_value);
+	return hash;
+}
+
+static char *ws_get_location(char *location, char *uri)
+{
+	char *ws_scheme = "ws://";
+	int len = strlen(location) + strlen(uri) + strlen(ws_scheme) + 1;
+	char *res = (char *)calloc(len, sizeof(char));
+	if (res == NULL)
+		return NULL;
+
+	sprintf(res, "%s%s%s", ws_scheme, location, uri);
+
+	return res;
 }
 
 static int get_number_from_string(char *str)
@@ -74,10 +288,8 @@ static int get_number_from_string(char *str)
 	int rank = 1;
 
 	int len = strlen(str);
-	int start_pos = (int)(strstr(str, " ") - str);
 	int i;
-
-	for (i = len - 1; i > start_pos; i--) {
+	for (i = len - 1; i >= 0; i--) {
 		switch (str[i]) {
 			case '0' : raw_num += rank * 0; rank *= 10; break;
 			case '1' : raw_num += rank * 1; rank *= 10; break;
@@ -94,245 +306,4 @@ static int get_number_from_string(char *str)
 	}
 
 	return raw_num / space_num;
-}
-
-static u_char *md5_hash_challenge(int key_1, int key_2, u_char *value)
-{
-	u_char *hashed_value = (u_char *)malloc(16);
-	if (hashed_value == NULL) {
-		fprintf(stderr, "malloc : %s\n", __func__);
-		exit(EXIT_FAILURE);
-	}
-
-	int key_1_big_endian = htonl(key_1);
-	int key_2_big_endian = htonl(key_2);
-	memcpy(hashed_value, (char *)&key_1_big_endian, 4);
-	memcpy(hashed_value + 4, (char *)&key_2_big_endian, 4);
-	memcpy(hashed_value + 8, value, 8);
-
-	u_char *hash = (u_char *)malloc(16);
-	if (hash == NULL) {
-		fprintf(stderr, "malloc : %s\n", __func__);
-		exit(EXIT_FAILURE);
-	}
-
-	MD5(hashed_value, 16, hash);
-
-	free(hashed_value);
-
-	return hash;
-}
-
-
-static u_char *try_to_treat_handshake(struct evbuffer *buf)
-{
-	char *line;
-	int i;
-
-	for (i = 0; i < 5; i++) {
-		line = evbuffer_readline(buf);
-		free(line);
-	}
-
-	line = evbuffer_readline(buf);
-	int key_1 = get_number_from_string(line);
-	free(line);
-
-	line = evbuffer_readline(buf);
-	int key_2 = get_number_from_string(line);
-	free(line);
-
-	u_char *val = (u_char *)malloc(8);
-	memcpy(val, buf->buffer + 2, 8);
-
-	u_char *hash = md5_hash_challenge(key_1, key_2, val);
-
-	free(val);
-
-	return hash;
-}
-
-static void ws_read_message(struct bufferevent *bufev, void *arg)
-{
-
-
-	bufev->input->buffer++;
-	u_char c = bufev->input->buffer[bufev->input->off - 2];
-	bufev->input->buffer[bufev->input->off - 2] = '\0';
-	fprintf(stderr, "%s\n", bufev->input->buffer);
-	bufev->input->buffer[bufev->input->off - 2] = c;
-	bufev->input->buffer--;
-
-	bufferevent_write(bufev, bufev->input->buffer, bufev->input->off);
-
-	evbuffer_drain(bufev->input, bufev->input->off);
-}
-
-static void ws_close_connection(struct bufferevent *bufev, short what, void *arg)
-{
-	struct ws_connection *conn = (struct ws_connection *)arg;
-
-	bufferevent_free(conn->bufev);
-
-	free(conn);
-}
-
-static ws_cb *ws_server_get_cb(struct ws_server *serv, char *uri)
-{
-	return NULL;
-}
-
-static int ws_open_connection(struct bufferevent *bufev, struct ws_server *serv)
-{
-	struct ws_connection *conn = (struct ws_connection *)malloc(sizeof(struct ws_connection));
-	if (conn == NULL)
-		return -1;
-
-	conn->bufev = bufev;
-
-	bufferevent_setcb(bufev, ws_read_message, NULL, ws_close_connection, conn);
-
-	conn->cb = ws_server_get_cb(serv, "/");
-
-	return 0;
-}
-
-static void ws_read_handshake(struct bufferevent *bufev, void *arg)
-{
-	struct ws_server *serv = (struct ws_server *)arg;
-
-	u_char *hash = try_to_treat_handshake(bufev->input);
-
-	evbuffer_drain(bufev->input, bufev->input->off);
-
-	handshake_response(bufev, hash);
-
-	free(hash);
-
-	ws_open_connection(bufev, serv);
-}
-
-static void ws_error_handshake(struct bufferevent *bufev, short what, void *arg)
-{
-	bufferevent_free(bufev);
-}
-
-static void ws_accept(int sock, short type, void *arg)
-{
-	struct sockaddr_in sin_client;
-	int from_len = sizeof(sin_client);
-	int sock_client = accept(sock, (struct sockaddr *)&sin_client, (socklen_t *)&from_len);
-
-	struct bufferevent *bufev = bufferevent_new(sock_client, ws_read_handshake, NULL, ws_error_handshake, arg);
-	if (bufev == NULL)
-		return;
-
-	bufferevent_enable(bufev, EV_READ);
-	bufferevent_enable(bufev, EV_WRITE);
-}
-
-static int prepare_server_socket(int port)
-{
-	int sock_server = socket(AF_INET, SOCK_STREAM, 0);
-	if (sock_server == -1) {
-		return -1;
-	}
-	struct sockaddr_in sin_server;
-	memset(&sin_server, '\0', sizeof(struct sockaddr_in));
-	sin_server.sin_family = AF_INET;
-	sin_server.sin_port = htons(port);/*FIXME*/
-	sin_server.sin_addr.s_addr = htonl(INADDR_ANY);
-	if (bind(sock_server, (struct sockaddr *)&sin_server,
-							sizeof(struct sockaddr_in)) == -1) {
-		return -1;
-	}
-	if (listen(sock_server, MAX_CLIENTS) == -1) {
-		return -1;
-	}
-	if (fcntl(sock_server, F_SETFL, O_NONBLOCK) == -1) {
-		return -1;
-	}
-	return sock_server;
-}
-
-
-static int prepare_server_event(struct event *event_server,
-		int sock_server, void *arg)
-{
-	event_init();
-	event_set(event_server, sock_server, EV_READ | EV_PERSIST,
-					ws_accept, arg);
-	if (event_add(event_server, NULL) == -1) {
-		return -1;
-	}
-	return 0;
-}
-
-struct ws_server *ws_init(int port)
-{
-	struct ws_server *serv = (struct ws_server *)malloc(sizeof(struct ws_server));
-	if (serv == NULL)
-		return NULL;
-
-	INIT_LIST_HEAD(&serv->callbacks);
-
-	int sock = prepare_server_socket(port);
-	if (sock == -1)
-		goto error;
-
-	int ret = prepare_server_event(&serv->ev_accept, sock, serv);
-	if (ret != 0)
-		goto error;
-
-	signal(SIGPIPE, SIG_IGN);
-
-	return serv;
-
-error:
-	free(serv);
-	return NULL;
-}
-
-int ws_set_callback(struct ws_server *serv, char *uri, ws_cb *cb)
-{
-	//check already exist
-	struct cb_entry *e = (struct cb_entry *)malloc(sizeof(struct cb_entry));
-	if (e == NULL)
-		return -1;
-
-	e->uri = string_copy(uri);
-	if (e->uri == NULL)
-		goto error;
-
-	e->cb = cb;
-
-	list_add(&e->list, &serv->callbacks);
-
-	return 0;
-
-error:
-	free(e);
-	return -1;
-}
-
-void ws_remove_callback(struct ws_server *serv, char *uri)
-{
-	//check and remove
-}
-
-void ws_destroy(struct ws_server);
-int ws_send(struct ws_connection conn, u_char *message);
-
-
-static char *string_copy(char *source)
-{
-	if (source == NULL)
-		return NULL;
-
-	int len = strlen(source);
-	char *dest = (char *)malloc(len + 1);
-	if (dest == NULL)
-		return NULL;
-
-	return strcpy(dest, source);
 }

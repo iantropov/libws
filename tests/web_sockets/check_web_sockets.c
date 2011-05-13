@@ -1,11 +1,4 @@
-/*
- * main.c
- *
- *  Created on: Apr 8, 2011
- *      Author: ant
- */
-
-#include <stdlib.h>
+#include "check.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -13,7 +6,7 @@
 #include <event0/bufevent.h>
 #include <event.h>
 
-#include "web_sockets.h"
+#include "../../src/web_sockets.h"
 
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -27,6 +20,7 @@
 #define HTTP_PORT 7777
 #define HTTP_HOST "127.0.0.1"
 
+#define CB_ARG_VALUE 0xdffd
 #define MESSAGE "Hello"
 
 static struct evhttp *__eh;
@@ -36,15 +30,10 @@ static const struct timeval __tv = {0, 100000};
 
 static void (*__commands[100])();
 static int __command_counter = 0;
+static int __waiting_command_counter;
 static u_char *__message;
 static short __what;
 static struct ws_connection *__ws_conn;
-
-static void fail_unless(int a, char *s)
-{
-	if (!a)
-		fprintf(stderr, "%s\n", s);
-}
 
 static int connect_to_port(int port)
 {
@@ -74,24 +63,32 @@ static int process_commands(void(**commands)(), int command_counter)
 
 static void start_process_commands()
 {
-	__command_counter = 0;
 	__command_counter = process_commands(__commands, __command_counter);
 	event_dispatch();
 }
 
 static void add_command(void (*cb)())
 {
-	__commands[__command_counter++] = cb;
+	__commands[__waiting_command_counter++] = cb;
+}
+
+static void check_arg(void *arg)
+{
+	fail_unless(arg == (void *)CB_ARG_VALUE, "error cb_arg");
 }
 
 static void ws_initcb(struct ws_connection *conn, void *arg)
 {
+	check_arg(arg);
+
 	__ws_conn = conn;
 	__command_counter = process_commands(__commands, __command_counter);
 }
 
 static void ws_messagecb(struct ws_connection *conn, u_char *mes, void *arg)
 {
+	check_arg(arg);
+
 	__message = mes;
 	__ws_conn = conn;
 	__command_counter = process_commands(__commands, __command_counter);
@@ -99,6 +96,8 @@ static void ws_messagecb(struct ws_connection *conn, u_char *mes, void *arg)
 
 static void ws_errorcb(struct ws_connection *conn, short what, void *arg)
 {
+	check_arg(arg);
+
 	__what = what;
 	__ws_conn = conn;
 	__command_counter = process_commands(__commands, __command_counter);
@@ -106,16 +105,20 @@ static void ws_errorcb(struct ws_connection *conn, short what, void *arg)
 
 static void client_readcb(struct bufevent *bufev, void *arg)
 {
+	check_arg(arg);
+
 	__command_counter = process_commands(__commands, __command_counter);
 }
 
 static void client_writecb(struct bufevent *bufev, void *arg)
 {
-
+	check_arg(arg);
 }
 
 static void client_errorcb(struct bufevent *bufev, short what, void *arg)
 {
+	check_arg(arg);
+
 	__what = what;
 	__command_counter = process_commands(__commands, __command_counter);
 }
@@ -124,7 +127,7 @@ static void prepare_server_side()
 {
 	__eh = evhttp_start(HTTP_HOST, HTTP_PORT);
 
-	__ws_conn = ws_new(ws_initcb, ws_messagecb, ws_errorcb, NULL);
+	__ws_conn = ws_new(ws_initcb, ws_messagecb, ws_errorcb, (void *)CB_ARG_VALUE);
 	fail_unless(__ws_conn != NULL, "ws_new failed");
 
 	evhttp_set_ws(__eh, WS_URI, __ws_conn);
@@ -140,7 +143,7 @@ static void prepare_client_side()
 {
 	__client_sock = connect_to_port(HTTP_PORT);
 
-	__client_bufev = bufevent_new(__client_sock, client_readcb, client_writecb, client_errorcb, NULL);
+	__client_bufev = bufevent_new(__client_sock, client_readcb, client_writecb, client_errorcb, (void *)CB_ARG_VALUE);
 	fail_unless(__client_bufev != NULL, "bufevent_new");
 	bufevent_enable(__client_bufev, EV_READ);
 }
@@ -155,12 +158,16 @@ static void setup()
 {
 	event_init();
 
+	__waiting_command_counter = __command_counter = 0;
+
 	prepare_server_side();
 	prepare_client_side();
 }
 
 static void teardown()
 {
+	fail_unless(__waiting_command_counter  + 1 == __command_counter, "Not all cbs are executed");
+
 	clean_server_side();
 	clean_client_side();
 }
@@ -294,7 +301,7 @@ static void test_init_server()
 	fail_unless(ws_get_bufevent(__ws_conn) != NULL, "bufev doesn`t exist yet");
 }
 
-void test_1()
+START_TEST(test_success_0)
 {
 	add_command(send_handshake_client);
 	add_command(NULL);
@@ -311,8 +318,9 @@ void test_1()
 
 	start_process_commands();
 }
+END_TEST
 
-void test_2()
+START_TEST(test_success_1)
 {
 	add_command(send_handshake_client);
 	add_command(NULL);
@@ -332,10 +340,36 @@ void test_2()
 
 	start_process_commands();
 }
+END_TEST
 
-int main()
+START_TEST(test_error_0)
 {
-	setup();
-	test_1();
-	teardown();
+	struct ws_connection *ws = ws_new(NULL, NULL, NULL, NULL);
+	ws_send_message(ws, "cdcd");
+	ws_send_close(ws);
+	ws_free(ws);
+
+	__command_counter = 1;
+}
+END_TEST
+
+static TCase *web_sockets_tcase()
+{
+	TCase *tc_web_sockets = tcase_create ("web_sockets");
+	tcase_add_checked_fixture(tc_web_sockets, setup, teardown);
+	tcase_add_test (tc_web_sockets, test_success_0);
+	tcase_add_test (tc_web_sockets, test_success_1);
+
+	tcase_add_test (tc_web_sockets, test_error_0);
+
+	return tc_web_sockets;
+}
+
+Suite *make_web_sockets_suite (void)
+{
+	Suite *s = suite_create ("web_sockets");
+
+	suite_add_tcase (s, web_sockets_tcase());
+	
+	return s;
 }

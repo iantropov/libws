@@ -1,6 +1,7 @@
 #include <check.h>
 
 #include "ws_parser/check_ws_parser.h"
+#include "web_sockets/check_web_sockets.h"
 
 #include <stdlib.h>
 
@@ -8,6 +9,7 @@ int main (void)
 {
   int number_failed;
   SRunner *sr = srunner_create(make_ws_parser_suite());
+  srunner_add_suite(sr, make_web_sockets_suite());
   srunner_run_all (sr, CK_NORMAL);
   number_failed = srunner_ntests_failed (sr);
   srunner_free (sr);

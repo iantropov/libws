@@ -15,3 +15,6 @@ bin_PROGRAMS = demo
 demo_SOURCES = main.c
 
 demo_LDADD = libws.la
+
+library_includedir = $(includedir)/ws
+library_include_HEADERS = web_sockets.h

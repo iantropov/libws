@@ -27,7 +27,8 @@ AC_CHECK_HEADERS([stdlib.h event.h])
 # Checks for typedefs, structures, and compiler characteristics.
 
 AC_CHECK_LIB(event, event_init)
-AC_CHECK_LIB(ssl, SSL_library_init)
+AC_CHECK_LIB(event0, bufevent_new)
+#AC_CHECK_LIB(ssl, SSL_library_init)
 # Checks for library functions.
 AC_FUNC_MALLOC
 
@@ -37,6 +38,7 @@ AC_CONFIG_HEADERS([config.h])
 AC_CONFIG_FILES([Makefile
                  src/Makefile
                  tests/Makefile
-                 tests/ws_parser/Makefile])
+                 tests/ws_parser/Makefile
+                 tests/web_sockets/Makefile])
 
 AC_OUTPUT
