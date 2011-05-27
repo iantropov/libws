@@ -115,7 +115,7 @@ static void prepare_server_side()
 
 static void clean_server_side()
 {
-	ws_accepter_free(__wsaccepter);
+	ws_accepter_free(__ws_accepter);
 	evhttp_free(__eh);
 	ws_connection_free(__ws_conn);
 }
@@ -299,7 +299,6 @@ static void test_handshake_client()
 static void test_init_server()
 {
 	fail_unless(__ws_conn != NULL, "ws_conn NULL");
-	fail_unless(ws_get_bufevent(__ws_conn) != NULL, "bufev doesn`t exist yet");
 }
 
 START_TEST(test_success_0)
@@ -343,25 +342,12 @@ START_TEST(test_success_1)
 }
 END_TEST
 
-START_TEST(test_error_0)
-{
-	struct ws_connection *ws = ws_new(NULL, NULL, NULL, NULL);
-	ws_send_message(ws, "cdcd");
-	ws_send_close(ws);
-	ws_free(ws);
-
-	__command_counter = 1;
-}
-END_TEST
-
 static TCase *web_sockets_tcase()
 {
 	TCase *tc_web_sockets = tcase_create ("web_sockets");
 	tcase_add_checked_fixture(tc_web_sockets, setup, teardown);
 	tcase_add_test (tc_web_sockets, test_success_0);
 	tcase_add_test (tc_web_sockets, test_success_1);
-
-	tcase_add_test (tc_web_sockets, test_error_0);
 
 	return tc_web_sockets;
 }
