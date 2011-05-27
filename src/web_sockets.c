@@ -24,17 +24,24 @@ struct ws_connection {
 	struct bufevent *bufev;
 	struct ws_parser_info *info;
 
-	ws_init_cb init_cb;
 	ws_message_cb mes_cb;
 	ws_error_cb err_cb;
 	void *cb_arg;
+};
+
+struct ws_accepter {
+	struct evhttp *eh;
+	char *uri;
+
+	ws_accept_cb a_cb;
+	void *arg;
 };
 
 static int get_number_from_string(char *str);
 static u_char *md5_hash_challenge(int key_1, int key_2, u_char *value);
 static char *ws_get_location(char *location, char *uri);
 
-static int ws_handshake_response(struct evhttp_request *req, char *origin, char *location, u_char *hash)
+static int ws_send_handshake_response(struct evhttp_request *req, char *origin, char *location, u_char *hash)
 {
 	evhttp_add_header(req->output_headers, "Upgrade", "WebSocket");
 	evhttp_add_header(req->output_headers, "Connection", "Upgrade");
@@ -68,7 +75,7 @@ static u_char *ws_prepare_handshake_response(char *s_key_1, char *s_key_2, u_cha
 	return md5_hash_challenge(key_1, key_2, hash);
 }
 
-void ws_free(struct ws_connection *conn)
+void ws_connection_free(struct ws_connection *conn)
 {
 	if (conn->bufev != NULL)
 		bufevent_free(conn->bufev);
@@ -78,7 +85,7 @@ void ws_free(struct ws_connection *conn)
 	free(conn);
 }
 
-static void ws_handle_message(u_char *message, void *arg)
+static void ws_parser_handle_message(u_char *message, void *arg)
 {
 	struct ws_connection *conn = (struct ws_connection *)arg;
 
@@ -92,45 +99,21 @@ static void ws_error(struct ws_connection *conn, short what)
 		conn->err_cb(conn, what, conn->cb_arg);
 }
 
-static void ws_handle_error(struct ws_parser_info *info, short what, void *arg)
+static void ws_parser_handle_error(struct ws_parser_info *info, short what, void *arg)
 {
 	ws_error((struct ws_connection *)arg, what);
 }
 
-void ws_set_cbs(struct ws_connection *conn, ws_init_cb init_cb,
+void ws_connection_set_cbs(struct ws_connection *conn,
 		ws_message_cb mes_cb, ws_error_cb err_cb, void *arg)
 {
-	conn->init_cb = init_cb;
 	conn->mes_cb = mes_cb;
 	conn->err_cb = err_cb;
 
 	conn->cb_arg = arg;
 }
 
-struct ws_connection *ws_new(ws_init_cb init_cb, ws_message_cb mes_cb, ws_error_cb err_cb, void *arg)
-{
-	struct ws_parser_info *info = NULL;
-	struct ws_connection *conn = (struct ws_connection *)calloc(1, sizeof(struct ws_connection));
-	if (conn == NULL)
-		goto error;
-
-	info = ws_parser_init(ws_handle_message, ws_handle_error, conn);
-	if (info == NULL)
-		goto error;
-
-	conn->info = info;
-
-	ws_set_cbs(conn, init_cb, mes_cb, err_cb, arg);
-
-	return conn;
-error:
-	free(conn);
-	ws_parser_destroy(info);
-
-	return NULL;
-}
-
-static void ws_readcb(struct bufevent *bufev, void *arg)
+static void ws_bufevent_readcb(struct bufevent *bufev, void *arg)
 {
 	struct ws_connection *conn = (struct ws_connection *)arg;
 	struct evbuffer *buf = bufevent_get_input(bufev);
@@ -140,27 +123,47 @@ static void ws_readcb(struct bufevent *bufev, void *arg)
 	evbuffer_drain(buf, ws_parser_drain(conn->info));
 }
 
-static void ws_errorcb(struct bufevent *bufev, short what, void *arg)
+static void ws_bufevent_errorcb(struct bufevent *bufev, short what, void *arg)
 {
 	ws_error((struct ws_connection *)arg, what);
 }
 
+struct ws_connection *ws_connection_new(struct bufevent *bufev,
+		ws_message_cb mes_cb, ws_error_cb err_cb, void *arg)
+{
+	struct ws_parser_info *info = NULL;
+	struct ws_connection *conn = (struct ws_connection *)calloc(1, sizeof(struct ws_connection));
+	if (conn == NULL)
+		goto error;
+
+	info = ws_parser_init(ws_parser_handle_message, ws_parser_handle_error, conn);
+	if (info == NULL)
+		goto error;
+
+	conn->info = info;
+
+	conn->bufev = bufev;
+	bufevent_setcb(bufev, ws_bufevent_readcb, NULL, ws_bufevent_errorcb, conn);
+
+	ws_connection_set_cbs(conn, mes_cb, err_cb, arg);
+
+	return conn;
+error:
+	free(conn);
+	ws_parser_destroy(info);
+
+	return NULL;
+}
+
 static void ws_after_handshake(struct bufevent *bufev, void *arg)
 {
-	struct ws_connection *ws_conn = arg;
+	struct ws_accepter *wa = arg;
 
-	bufevent_setcb(bufev, ws_readcb, NULL, ws_errorcb, ws_conn);
-
-	ws_conn->bufev = bufev;
-
-	if (ws_conn->init_cb != NULL)
-		ws_conn->init_cb(ws_conn, ws_conn->cb_arg);
+	wa->a_cb(wa, bufev, wa->arg);
 }
 
 static void ws_handshakecb(struct evhttp_request *req, void *arg)
 {
-	struct ws_connection *ws_conn = arg;
-
 	struct evkeyvalq *headers = req->input_headers;
 
 	char *sec_key_1 = (char *)evhttp_find_header(headers, "Sec-WebSocket-Key1");
@@ -185,29 +188,21 @@ static void ws_handshakecb(struct evhttp_request *req, void *arg)
 
 	u_char *hash = ws_prepare_handshake_response(sec_key_1, sec_key_2, challenge);
 
-	evhttp_connection_upgrade(req->evcon, ws_after_handshake, ws_conn);
+	evhttp_connection_upgrade(req->evcon, ws_after_handshake, arg);
 
-	if (ws_handshake_response(req, origin, location, hash) == -1)
+	if (ws_send_handshake_response(req, origin, location, hash) == -1)
 		goto error;
 
 	free(hash);
 
 	return;
 error:
-
-	ws_error(ws_conn, 1);
-
 	free(hash);
 
 	evhttp_send_error(req, 500, "Internal Error");
 }
 
-void evhttp_set_ws(struct evhttp *http, char *uri, struct ws_connection *conn)
-{
-	evhttp_set_cb(http, uri, ws_handshakecb, conn);
-}
-
-int ws_send_message(struct ws_connection *conn, u_char *message)
+int ws_connection_send_message(struct ws_connection *conn, u_char *message)
 {
 	if (conn->bufev == NULL)
 		return -1;
@@ -224,12 +219,12 @@ int ws_send_message(struct ws_connection *conn, u_char *message)
 	return 0;
 }
 
-struct bufevent *ws_get_bufevent(struct ws_connection *conn)
-{
-	return conn->bufev;
-}
+//struct bufevent *ws_get_bufevent(struct ws_connection *conn)
+//{
+//	return conn->bufev;
+//}
 
-int ws_send_close(struct ws_connection *conn)
+int ws_connection_send_close(struct ws_connection *conn)
 {
 	if (conn->bufev == NULL)
 		return -1;
@@ -241,6 +236,35 @@ int ws_send_close(struct ws_connection *conn)
 		return -1;
 
 	return 0;
+}
+
+struct ws_accepter *ws_accepter_new(struct evhttp *eh, char *uri, ws_accept_cb ac_cb, void *arg)
+{
+	struct ws_accepter *wa = (struct ws_accepter *)calloc(1, sizeof(struct ws_accepter));
+	if (wa == NULL)
+		return NULL;
+
+	wa->uri = strdup(uri);
+	if (wa->uri == NULL) {
+		free(wa);
+		return NULL;
+	}
+
+	wa->eh = eh;
+	wa->a_cb = ac_cb;
+	wa->arg = arg;
+
+	evhttp_set_cb(eh, uri, ws_handshakecb, wa);
+
+	return wa;
+}
+
+void ws_accepter_free(struct ws_accepter *wa)
+{
+	evhttp_del_cb(wa->eh, wa->uri);
+
+	free(wa->uri);
+	free(wa);
 }
 
 /*-----------------HELPER FUNCTIONS------------------------*/

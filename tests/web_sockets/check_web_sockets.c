@@ -34,6 +34,7 @@ static int __waiting_command_counter;
 static u_char *__message;
 static short __what;
 static struct ws_connection *__ws_conn;
+static struct ws_accepter *__ws_accepter;
 
 static int connect_to_port(int port)
 {
@@ -77,14 +78,6 @@ static void check_arg(void *arg)
 	fail_unless(arg == (void *)CB_ARG_VALUE, "error cb_arg");
 }
 
-static void ws_initcb(struct ws_connection *conn, void *arg)
-{
-	check_arg(arg);
-
-	__ws_conn = conn;
-	__command_counter = process_commands(__commands, __command_counter);
-}
-
 static void ws_messagecb(struct ws_connection *conn, u_char *mes, void *arg)
 {
 	check_arg(arg);
@@ -101,6 +94,30 @@ static void ws_errorcb(struct ws_connection *conn, short what, void *arg)
 	__what = what;
 	__ws_conn = conn;
 	__command_counter = process_commands(__commands, __command_counter);
+}
+
+static void ws_acceptcb(struct ws_accepter *wa, struct bufevent *bufev, void *arg)
+{
+	check_arg(arg);
+
+	__ws_conn = ws_connection_new(bufev, ws_messagecb, ws_errorcb, (void *)CB_ARG_VALUE);
+	fail_unless(__ws_conn != NULL, "ws_new failed");
+
+	__command_counter = process_commands(__commands, __command_counter);
+}
+
+static void prepare_server_side()
+{
+	__eh = evhttp_start(HTTP_HOST, HTTP_PORT);
+
+	__ws_accepter = ws_accepter_new(__eh, WS_URI, ws_acceptcb, (void *)CB_ARG_VALUE);
+}
+
+static void clean_server_side()
+{
+	ws_accepter_free(__wsaccepter);
+	evhttp_free(__eh);
+	ws_connection_free(__ws_conn);
 }
 
 static void client_readcb(struct bufevent *bufev, void *arg)
@@ -121,22 +138,6 @@ static void client_errorcb(struct bufevent *bufev, short what, void *arg)
 
 	__what = what;
 	__command_counter = process_commands(__commands, __command_counter);
-}
-
-static void prepare_server_side()
-{
-	__eh = evhttp_start(HTTP_HOST, HTTP_PORT);
-
-	__ws_conn = ws_new(ws_initcb, ws_messagecb, ws_errorcb, (void *)CB_ARG_VALUE);
-	fail_unless(__ws_conn != NULL, "ws_new failed");
-
-	evhttp_set_ws(__eh, WS_URI, __ws_conn);
-}
-
-static void clean_server_side()
-{
-	evhttp_free(__eh);
-	ws_free(__ws_conn);
 }
 
 static void prepare_client_side()
@@ -221,7 +222,7 @@ static void send_message_client()
 
 static void send_message_server()
 {
-	ws_send_message(__ws_conn, MESSAGE);
+	ws_connection_send_message(__ws_conn, MESSAGE);
 }
 
 static void test_message_client()
@@ -276,7 +277,7 @@ static void send_closing_frame(struct bufevent *bufev)
 
 static void send_closing_frame_server()
 {
-	ws_send_close(__ws_conn);
+	ws_connection_send_close(__ws_conn);
 }
 
 static void send_closing_frame_client()

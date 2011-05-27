@@ -16,23 +16,23 @@
 #define WS_INTERNAL_ERROR 0x2
 #define WS_CLOSING_FRAME 0x4
 
+
+struct ws_accepter;
+
+typedef void (*ws_accept_cb)(struct ws_accepter *wa, struct bufevent *bufev, void *arg);
+
+struct ws_accepter *ws_accepter_new(struct evhttp *eh, char *uri, ws_accept_cb ac_cb, void *arg);
+void ws_accepter_free(struct ws_accepter *wa);
+
 struct ws_connection;
 
-typedef void (*ws_message_cb)(struct ws_connection *conn, u_char *message, void *arg);
-typedef void (*ws_error_cb)(struct ws_connection *conn, short what, void *arg);
-typedef void (*ws_init_cb)(struct ws_connection *conn, void *arg);
+typedef void (*ws_message_cb)(struct ws_connection *wc, u_char *mes, void *arg);
+typedef void (*ws_error_cb)(struct ws_connection *wc, short error, void *arg);
 
-struct ws_connection *ws_new(ws_init_cb init_cb, ws_message_cb mes_cb,
-		ws_error_cb err_cb, void *arg);
-int ws_send_message(struct ws_connection *conn, u_char *message);
-int ws_send_close(struct ws_connection *conn);
-void ws_free(struct ws_connection *conn);
+struct ws_connection *ws_connection_new(struct bufevent *bufev, ws_message_cb m_cb, ws_error_cb e_cb, void *arg);
+int ws_connection_send_message(struct ws_connection *wc, u_char *mes);
+int ws_connection_send_close(struct ws_connection *wc);
+void ws_connection_free(struct ws_connection *wc);
 
-void ws_set_cbs(struct ws_connection *conn, ws_init_cb init_cb,
-		ws_message_cb mes_cb, ws_error_cb err_cb, void *arg);
-
-struct bufevent *ws_get_bufevent(struct ws_connection *);
-
-void evhttp_set_ws(struct evhttp *http, char *uri, struct ws_connection *conn);
 
 #endif /* WEB_SOCKETS_H_ */
