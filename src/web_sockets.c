@@ -193,15 +193,16 @@ static void ws_handshakecb(struct evhttp_request *req, void *arg)
 
 	evhttp_connection_upgrade(req->evcon, ws_after_handshake, arg);
 
-	if (ws_send_handshake_response(req, origin, location, hash) == -1)
+	if (ws_send_handshake_response(req, origin, location, hash) == -1) {
+		free(hash);
 		goto error;
+	}
 
 	free(hash);
 
 	return;
-error:
-	free(hash);
 
+error:
 	evhttp_send_error(req, 500, "Internal Error");
 }
 
