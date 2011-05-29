@@ -30,6 +30,7 @@ typedef void (*ws_message_cb)(struct ws_connection *wc, u_char *mes, void *arg);
 typedef void (*ws_error_cb)(struct ws_connection *wc, short error, void *arg);
 
 struct ws_connection *ws_connection_new(struct bufevent *bufev, ws_message_cb m_cb, ws_error_cb e_cb, void *arg);
+void ws_connection_set_cbs(struct ws_connection *conn, ws_message_cb m_cb, ws_error_cb e_cb, void *arg);
 int ws_connection_send_message(struct ws_connection *wc, u_char *mes);
 int ws_connection_send_close(struct ws_connection *wc);
 void ws_connection_free(struct ws_connection *wc);
