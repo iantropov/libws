@@ -20,6 +20,9 @@
 #define CHALLENGE_REQUEST_SIZE 8
 #define CHALLENGE_RESPONSE_SIZE 16
 
+#define WS_SCHEME "ws://"
+#define WSS_SCHEME "wss://"
+
 struct ws_connection {
 	struct bufevent *bufev;
 	struct ws_parser_info *info;
@@ -39,7 +42,7 @@ struct ws_accepter {
 
 static int get_number_from_string(char *str);
 static u_char *md5_hash_challenge(int key_1, int key_2, u_char *value);
-static char *ws_get_location(char *location, char *uri);
+static char *ws_get_location(struct evhttp_request *req, char *location, char *uri);
 
 static int ws_send_handshake_response(struct evhttp_request *req, char *origin, char *location, u_char *hash)
 {
@@ -47,7 +50,7 @@ static int ws_send_handshake_response(struct evhttp_request *req, char *origin, 
 	evhttp_add_header(req->output_headers, "Connection", "Upgrade");
 	evhttp_add_header(req->output_headers, "Sec-WebSocket-Origin", origin);
 
-	char *sec_location = ws_get_location(location, req->uri);
+	char *sec_location = ws_get_location(req, location, req->uri);
 	if (sec_location == NULL)
 		return -1;
 
@@ -292,9 +295,9 @@ exit :
 	return hash;
 }
 
-static char *ws_get_location(char *location, char *uri)
+static char *ws_get_location(struct evhttp_request *req, char *location, char *uri)
 {
-	char *ws_scheme = "ws://";
+	char *ws_scheme = evhttp_connection_is_secure(req->evcon) ? WSS_SCHEME : WS_SCEME;
 	int len = strlen(location) + strlen(uri) + strlen(ws_scheme) + 1;
 	char *res = (char *)calloc(len, sizeof(char));
 	if (res == NULL)
