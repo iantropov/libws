@@ -297,7 +297,7 @@ exit :
 
 static char *ws_get_location(struct evhttp_request *req, char *location, char *uri)
 {
-	char *ws_scheme = evhttp_connection_is_secure(req->evcon) ? WSS_SCHEME : WS_SCEME;
+	char *ws_scheme = evhttp_connection_is_secure(req->evcon) ? WSS_SCHEME : WS_SCHEME;
 	int len = strlen(location) + strlen(uri) + strlen(ws_scheme) + 1;
 	char *res = (char *)calloc(len, sizeof(char));
 	if (res == NULL)
