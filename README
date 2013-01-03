@@ -1,0 +1,13 @@
+А library that implements WebSocket protocol (draft-ietf-hybi-thewebsocketprotocol-00)
+
+BUILDING AND INSTALLATION 
+
+$ autoreconf --install -I ./
+$ ./configure
+$ make
+$ make check # (optional, run tests)
+$ sudo make install
+
+DOCUMENTATION
+
+A library documentation available on libws wiki: https://github.com/iantropov/libws/wiki
